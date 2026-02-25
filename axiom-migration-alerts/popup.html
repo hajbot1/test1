@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Axiom Migration Alerts</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 340px;
+      font-family: 'Inter', 'Segoe UI', sans-serif;
+      background: #0e1015;
+      color: #d8dae8;
+      font-size: 13px;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px;
+      border-bottom: 1px solid #1e2130;
+      background: #111318;
+    }
+    .header-icon { font-size: 22px; }
+    .header-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.2;
+    }
+    .header-sub {
+      font-size: 11px;
+      color: #5b5f76;
+      margin-top: 2px;
+    }
+
+    /* Status bar */
+    .status-bar {
+      padding: 10px 16px;
+      background: #0b0d12;
+      border-bottom: 1px solid #1e2130;
+      font-size: 11px;
+      color: #5b5f76;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #00c878;
+      display: inline-block;
+      margin-right: 6px;
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.35; }
+    }
+
+    /* Section */
+    .section {
+      padding: 14px 16px;
+      border-bottom: 1px solid #1a1d26;
+    }
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #454862;
+      margin-bottom: 10px;
+    }
+
+    /* Toggle row */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 0;
+    }
+    .toggle-label { color: #b0b3c8; }
+    .toggle-desc  { font-size: 11px; color: #4e526b; margin-top: 2px; }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 36px; height: 20px;
+      flex-shrink: 0;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute;
+      inset: 0;
+      background: #2a2d3a;
+      border-radius: 20px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      left: 2px; top: 2px;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+    .toggle input:checked + .toggle-slider { background: #5b9cf6; }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+    /* Cache info */
+    .cache-info {
+      background: #0b0d12;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 11px;
+      color: #4e526b;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .cache-info span { color: #7a7d95; }
+
+    /* Buttons */
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: opacity 0.15s, transform 0.1s;
+      text-align: center;
+    }
+    .btn:hover  { opacity: 0.85; }
+    .btn:active { transform: scale(0.98); }
+    .btn--ghost {
+      background: transparent;
+      border: 1px solid #2a2d3a;
+      color: #7a7d95;
+      margin-top: 8px;
+    }
+    .btn--danger {
+      background: rgba(255, 80, 80, 0.12);
+      border: 1px solid rgba(255, 80, 80, 0.3);
+      color: #ff5050;
+      margin-top: 6px;
+    }
+
+    /* Footer */
+    .footer {
+      padding: 10px 16px;
+      font-size: 10px;
+      color: #2e3148;
+      text-align: center;
+    }
+    .footer a { color: #3a4060; text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+
+    /* Checked tickers list */
+    #ticker-list {
+      max-height: 130px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .ticker-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      background: #111318;
+      border-radius: 6px;
+      border: 1px solid #1e2130;
+    }
+    .ticker-sym  { font-weight: 700; color: #c8cad8; font-size: 12px; }
+    .ticker-pill {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .ticker-pill--migrated { background: rgba(255,170,0,0.15); color: #ffaa00; }
+    .ticker-pill--clean    { background: rgba(0,200,120,0.12); color: #00c878; }
+    .ticker-empty { font-size: 11px; color: #3a3e55; text-align: center; padding: 12px 0; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <span class="header-icon">🔔</span>
+    <div>
+      <div class="header-title">Axiom Migration Alerts</div>
+      <div class="header-sub">pump.fun bonding curve tracker</div>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <span><span class="status-dot"></span>Active on axiom.trade/pulse</span>
+    <span id="cache-count">— cached</span>
+  </div>
+
+  <!-- Settings -->
+  <div class="section">
+    <div class="section-label">Settings</div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Show badges on page</div>
+        <div class="toggle-desc">Inject migration status badges next to tickers</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-badges" checked />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Browser notifications</div>
+        <div class="toggle-desc">Alert when a migrated ticker appears on page</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-notifications" checked />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div>
+        <div class="toggle-label">Show clean tickers</div>
+        <div class="toggle-desc">Display "no prior migrations" badge too</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="opt-show-clean" checked />
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- Cache -->
+  <div class="section">
+    <div class="section-label">Cache (1 hr TTL)</div>
+    <div class="cache-info">
+      <div>Entries cached: <span id="cache-entries">—</span></div>
+      <div>Last cleared: <span id="cache-cleared">never</span></div>
+    </div>
+    <button class="btn btn--danger" id="btn-clear-cache">Clear Cache</button>
+  </div>
+
+  <!-- Recently Checked -->
+  <div class="section">
+    <div class="section-label">Recently Checked</div>
+    <div id="ticker-list">
+      <div class="ticker-empty">No tickers checked yet.<br>Navigate to axiom.trade/pulse to start.</div>
+    </div>
+    <button class="btn btn--ghost" id="btn-open-axiom">Open Axiom Pulse →</button>
+  </div>
+
+  <div class="footer">
+    Data from pump.fun &amp; DexScreener · 1 yr lookback ·
+    <a href="https://github.com/" target="_blank">Source</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
