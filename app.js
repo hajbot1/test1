@@ -321,6 +321,7 @@ function buildCard(tok, isMig) {
         <div>
           <div class="c-name">${esc(tok.name)}</div>
           <div class="c-sym">$${esc(tok.symbol)} ${srcBadge} ${dexBadge}</div>
+          <div class="c-ca" title="${tok.baseAddress}" onclick="copyCA(event,'${tok.baseAddress}')">${tok.baseAddress ? tok.baseAddress.slice(0,4)+'…'+tok.baseAddress.slice(-4) : '—'} <span class="ca-copy">⎘</span></div>
         </div>
       </div>
       <div class="c-right">
@@ -354,6 +355,12 @@ function buildCard(tok, isMig) {
     </div>
   `;
   return div;
+}
+
+function copyCA(e, addr) {
+  e.stopPropagation();
+  if (!addr) return;
+  navigator.clipboard.writeText(addr).then(() => showToast('CA copied', 'g'));
 }
 
 function esc(s) {
