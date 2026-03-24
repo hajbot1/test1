@@ -145,6 +145,7 @@ function processPairs(pairs, profiles) {
   );
 
   renderFinalStretch();
+  updateUI(); // refresh position values with new prices
   enrichMissingIcons(fsTokens).then(() => renderFinalStretch());
 
   // Also fetch dedicated migrated results
@@ -155,6 +156,7 @@ function processPairs(pairs, profiles) {
       .slice(0, 20)
     );
     renderMigrated();
+    updateUI(); // refresh again once migrated prices are in
     enrichMissingIcons(migTokens).then(() => renderMigrated());
   });
 
