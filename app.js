@@ -51,9 +51,28 @@ const progressColor = pct => {
 
 // ── DexScreener API ──────────────────────────────────────────────────────────
 const DS_BASE = 'https://api.dexscreener.com';
+const WSOL    = 'So11111111111111111111111111111111111111112';
+let   solPrice = SOL_USD; // live-updated below
+const MIN_FEE_SOL = 5;
+
+// Fee rates per DEX
+function feeRate(source) {
+  if (source === 'pump' || source === 'bonk') return 0.01;   // 1%
+  return 0.0025;                                              // 0.25% PumpSwap/Raydium
+}
+
+async function fetchSolPrice() {
+  try {
+    const r = await fetch(`${DS_BASE}/latest/dex/tokens/${WSOL}`);
+    const d = await r.json();
+    const p = parseFloat((d.pairs || []).find(x => x.quoteToken?.symbol === 'USDC' || x.quoteToken?.symbol === 'USDT')?.priceUsd || 0);
+    if (p > 0) solPrice = p;
+  } catch {}
+}
 
 async function fetchTokens() {
   setLoading(true);
+  await fetchSolPrice(); // refresh SOL price before computing fees
 
   try {
     // 1. Get latest Solana token profiles
@@ -120,7 +139,7 @@ function processPairs(pairs, profiles) {
   // Final Stretch: fdv 8k–72k, sorted by fdv desc (closest to graduation first)
   fsTokens = dedupe(
     fsEnriched
-      .filter(t => t.fdv > 8000 && t.fdv < 72000)
+      .filter(t => t.fdv > 8000 && t.fdv < 72000 && t.feeSol >= MIN_FEE_SOL)
       .sort((a, b) => b.fdv - a.fdv)
       .slice(0, 20)
   );
@@ -128,6 +147,7 @@ function processPairs(pairs, profiles) {
   // Also fetch dedicated migrated results
   fetchMigrated().then(extra => {
     migTokens = dedupe([...migEnriched, ...extra]
+      .filter(t => t.feeSol >= MIN_FEE_SOL)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 20)
     );
@@ -182,6 +202,7 @@ function enrichPair(p, iconMap, isMigrated = false) {
   const mcap = p.marketCap || fdv;
   const price = parseFloat(p.priceUsd || 0);
   const vol24 = p.volume?.h24 || 0;
+  const feeSol = (vol24 * feeRate(source)) / solPrice;
   const liq = p.liquidity?.usd || 0;
   const buys24 = p.txns?.h24?.buys || 0;
   const sells24 = p.txns?.h24?.sells || 0;
@@ -199,7 +220,7 @@ function enrichPair(p, iconMap, isMigrated = false) {
     baseAddress: addr,
     pairAddress: p.pairAddress || '',
     icon: iconMap[addr] || null,
-    price, fdv, mcap, vol24, liq,
+    price, fdv, mcap, vol24, liq, feeSol,
     buys24, sells24,
     chg24, createdAt,
     progress, source,
@@ -338,6 +359,10 @@ function buildCard(tok, isMig) {
       <div class="c-metric">
         <div class="cm-l">VOL 24H</div>
         <div class="cm-v">$${fmtN(tok.vol24)}</div>
+      </div>
+      <div class="c-metric">
+        <div class="cm-l">FEES 24H</div>
+        <div class="cm-v fee-sol">${tok.feeSol >= 1 ? tok.feeSol.toFixed(1) : tok.feeSol.toFixed(2)} SOL</div>
       </div>
       <div class="c-metric">
         <div class="cm-l">PRICE</div>
