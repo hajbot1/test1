@@ -530,12 +530,18 @@ function save() {
   localStorage.setItem('ct_hist', JSON.stringify(history));
 }
 
+function livePrice(id) {
+  const tok = findTok(id);
+  if (tok) return tok.price;
+  const pos = positions[id];
+  return (pos && pos._livePrice) ? pos._livePrice : (pos ? pos.avgPrice : 0);
+}
+
 function getTotalPositionsValue() {
   let total = 0;
-  for (const [id, pos] of Object.entries(positions)) {
-    const tok = findTok(id);
-    const price = tok ? tok.price : pos.avgPrice;
-    total += pos.amount * price * (1 / SOL_USD);
+  for (const [id] of Object.entries(positions)) {
+    const pos = positions[id];
+    total += pos.amount * livePrice(id) * (1 / SOL_USD);
   }
   return total;
 }
@@ -580,8 +586,7 @@ function renderPositions() {
   list.innerHTML = '';
   ids.forEach(id => {
     const pos = positions[id];
-    const tok = findTok(id);
-    const curPrice = tok ? tok.price : pos.avgPrice;
+    const curPrice = livePrice(id);
     const curVal = pos.amount * curPrice * (1 / SOL_USD);
     const pnlSol = curVal - pos.solCost;
     const pnlPct = pos.solCost > 0 ? (pnlSol / pos.solCost * 100) : 0;
@@ -644,8 +649,7 @@ function refreshTradeUI() {
   const pos = activeToken ? positions[activeToken.id] : null;
   if (pos) {
     $('holdingRow').style.display = 'flex';
-    const tok = findTok(activeToken.id);
-    const curPrice = tok ? tok.price : pos.avgPrice;
+    const curPrice = livePrice(activeToken.id);
     const curVal = pos.amount * curPrice * (1 / SOL_USD);
     $('tHolding').textContent = `${fmtN(pos.amount)} tokens (◎ ${curVal.toFixed(4)})`;
   } else {
@@ -675,7 +679,7 @@ function executeBuy(tokenId, solAmt) {
   if (!tok) return;
   const tokensBought = (solAmt * SOL_USD) / tok.price;
   balance -= solAmt;
-  if (!positions[tokenId]) positions[tokenId] = { amount: 0, avgPrice: 0, solCost: 0, symbol: tok.symbol, name: tok.name };
+  if (!positions[tokenId]) positions[tokenId] = { amount: 0, avgPrice: 0, solCost: 0, symbol: tok.symbol, name: tok.name, baseAddress: tok.baseAddress };
   const pos = positions[tokenId];
   const prevCost = pos.avgPrice * pos.amount;
   pos.amount += tokensBought;
@@ -690,8 +694,7 @@ function executeBuy(tokenId, solAmt) {
 function executeSell(tokenId, pct) {
   const pos = positions[tokenId];
   if (!pos || pos.amount <= 0) { setMsg('No position to sell.', 'err'); return; }
-  const tok = findTok(tokenId);
-  const curPrice = tok ? tok.price : pos.avgPrice;
+  const curPrice = livePrice(tokenId);
   const tokensToSell = (pct / 100) * pos.amount;
   const usdReceived = tokensToSell * curPrice;
   const solReceived = usdReceived / SOL_USD;
@@ -752,8 +755,62 @@ function showToast(msg, cls='') {
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-// ── Auto-refresh every 30s ────────────────────────────────────────────────────
-setInterval(fetchTokens, 30000);
+// ── Lightweight price refresh (every 15s) ────────────────────────────────────
+async function refreshPrices() {
+  const listed = [...fsTokens, ...migTokens];
+  if (!listed.length) return;
+
+  // Also collect base addresses for held positions not currently in the lists
+  const listedAddrs = new Set(listed.map(t => t.baseAddress));
+  const heldExtra = Object.values(positions)
+    .filter(p => p.baseAddress && !listedAddrs.has(p.baseAddress))
+    .map(p => p.baseAddress);
+
+  const allAddrs = [...listedAddrs, ...heldExtra].filter(Boolean);
+  if (!allAddrs.length) return;
+
+  try {
+    // DexScreener accepts up to 30 addresses per call
+    const chunks = [];
+    for (let i = 0; i < allAddrs.length; i += 30) chunks.push(allAddrs.slice(i, i + 30));
+
+    for (const chunk of chunks) {
+      const r = await fetch(`${DS_BASE}/latest/dex/tokens/${chunk.join(',')}`);
+      const d = await r.json();
+      (d.pairs || []).forEach(p => {
+        const addr  = p.baseToken?.address;
+        const price = parseFloat(p.priceUsd || 0);
+        const vol24 = p.volume?.h24 || 0;
+        const chg24 = p.priceChange?.h24 || 0;
+        if (!addr || !price) return;
+
+        // Update in-list tokens
+        const tok = listed.find(t => t.baseAddress === addr);
+        if (tok) {
+          tok.price  = price;
+          tok.vol24  = vol24;
+          tok.chg24  = chg24;
+          tok.feeSol = (vol24 * feeRate(tok.source)) / solPrice;
+        }
+
+        // Update ghost tokens for held-but-not-listed positions
+        if (heldExtra.includes(addr)) {
+          Object.values(positions).forEach(pos => {
+            if (pos.baseAddress === addr) pos._livePrice = price;
+          });
+        }
+      });
+    }
+
+    renderFinalStretch();
+    renderMigrated();
+    updateUI();
+  } catch {}
+}
+
+// ── Auto-refresh: full fetch every 60s, price patch every 15s ────────────────
+setInterval(fetchTokens,    60000);
+setInterval(refreshPrices,  15000);
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 updateUI();
