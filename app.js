@@ -144,6 +144,9 @@ function processPairs(pairs, profiles) {
       .slice(0, 20)
   );
 
+  renderFinalStretch();
+  enrichMissingIcons(fsTokens).then(() => renderFinalStretch());
+
   // Also fetch dedicated migrated results
   fetchMigrated().then(extra => {
     migTokens = dedupe([...migEnriched, ...extra]
@@ -152,10 +155,28 @@ function processPairs(pairs, profiles) {
       .slice(0, 20)
     );
     renderMigrated();
+    enrichMissingIcons(migTokens).then(() => renderMigrated());
   });
 
-  renderFinalStretch();
   setLoading(false);
+}
+
+// Batch-fetch DexScreener token profiles for tokens still missing an icon
+async function enrichMissingIcons(tokens) {
+  const missing = tokens.filter(t => !t.icon && t.baseAddress);
+  if (!missing.length) return;
+  try {
+    const addrs = missing.map(t => t.baseAddress).join(',');
+    const r = await fetch(`${DS_BASE}/latest/dex/tokens/${addrs}`);
+    const d = await r.json();
+    const imgMap = {};
+    (d.pairs || []).forEach(p => {
+      const addr = p.baseToken?.address;
+      const img  = p.info?.imageUrl;
+      if (addr && img && !imgMap[addr]) imgMap[addr] = img;
+    });
+    tokens.forEach(t => { if (!t.icon && imgMap[t.baseAddress]) t.icon = imgMap[t.baseAddress]; });
+  } catch {}
 }
 
 // pump.fun bonding curve dexes
@@ -219,7 +240,7 @@ function enrichPair(p, iconMap, isMigrated = false) {
     symbol: base.symbol || '—',
     baseAddress: addr,
     pairAddress: p.pairAddress || '',
-    icon: iconMap[addr] || null,
+    icon: iconMap[addr] || p.info?.imageUrl || null,
     price, fdv, mcap, vol24, liq, feeSol,
     buys24, sells24,
     chg24, createdAt,
