@@ -3,11 +3,11 @@
 // ── Paper Trading State ──────────────────────────────────────────────────────
 const SOL_USD = 150; // approximate SOL price for calc purposes
 
-let balance  = parseFloat(localStorage.getItem('ct_bal')  ?? '100');
+let balance  = parseFloat(localStorage.getItem('ct_bal')  ?? '5');
 let realised = parseFloat(localStorage.getItem('ct_real') ?? '0');
 let positions = JSON.parse(localStorage.getItem('ct_pos')  ?? '{}');
 let history   = JSON.parse(localStorage.getItem('ct_hist') ?? '[]');
-const INIT_BAL = 100;
+const INIT_BAL = 5;
 
 // ── Active token for modal ───────────────────────────────────────────────────
 let activeToken = null;
@@ -43,10 +43,10 @@ const fmtAge = ts => {
   return Math.floor(s/86400) + 'd';
 };
 const progressColor = pct => {
-  if (pct >= 90) return '#ff4060';
-  if (pct >= 70) return '#f0c040';
-  if (pct >= 40) return '#4fa3ff';
-  return '#00ff88';
+  if (pct >= 90) return '#DC2626';
+  if (pct >= 70) return '#D97706';
+  if (pct >= 40) return '#E8632A';
+  return '#FB923C';
 };
 
 // ── DexScreener API ──────────────────────────────────────────────────────────
@@ -341,7 +341,7 @@ function buildCard(tok, isMig) {
         <span class="c-prog-pct">${tok.buys24}B / ${tok.sells24}S</span>
       </div>
       <div class="prog-track">
-        <div class="prog-fill" style="width:${tok.buys24+tok.sells24>0?Math.round(tok.buys24/(tok.buys24+tok.sells24)*100):50}%;background:linear-gradient(90deg,#00ff88,#4fa3ff)"></div>
+        <div class="prog-fill" style="width:${tok.buys24+tok.sells24>0?Math.round(tok.buys24/(tok.buys24+tok.sells24)*100):50}%;background:linear-gradient(90deg,#E8632A,#2563EB)"></div>
       </div>
     </div>` : `
     <div class="c-progress">
@@ -350,7 +350,7 @@ function buildCard(tok, isMig) {
         <span class="c-prog-pct">${tok.progress.toFixed(1)}%</span>
       </div>
       <div class="prog-track">
-        <div class="prog-fill" style="width:${pWidth}%;background:linear-gradient(90deg,#4fa3ff,${pColor})"></div>
+        <div class="prog-fill" style="width:${pWidth}%;background:linear-gradient(90deg,#2563EB,${pColor})"></div>
       </div>
     </div>`;
 
@@ -471,8 +471,8 @@ function drawChart(tok) {
   if (chartInst) { chartInst.destroy(); chartInst = null; }
   const ctx = $('chart').getContext('2d');
   const isUp = tok.chg24 >= 0;
-  const lc = isUp ? '#00ff88' : '#ff4060';
-  const fc = isUp ? 'rgba(0,255,136,0.07)' : 'rgba(255,64,96,0.07)';
+  const lc = isUp ? '#E8632A' : '#DC2626';
+  const fc = isUp ? 'rgba(232,99,42,0.08)' : 'rgba(220,38,38,0.08)';
 
   chartInst = new Chart(ctx, {
     type: 'line',
@@ -722,9 +722,9 @@ function sellAll(tokenId) {
 }
 
 function resetAccount() {
-  balance = 100; realised = 0; positions = {}; history = [];
+  balance = 5; realised = 0; positions = {}; history = [];
   save(); updateUI();
-  showToast('Account reset to ◎ 100', 'g');
+  showToast('Account reset to ◎ 5', 'g');
 }
 
 function setMsg(msg, cls) {

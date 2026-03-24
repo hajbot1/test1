@@ -2,23 +2,23 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:       #070a0e;
-  --bg1:      #0b0f15;
-  --bg2:      #0f1520;
-  --bg3:      #141b28;
-  --line:     rgba(255,255,255,0.06);
-  --line2:    rgba(255,255,255,0.1);
-  --g:        #00ff88;
-  --g2:       rgba(0,255,136,0.6);
-  --g-dim:    rgba(0,255,136,0.12);
-  --g-glow:   rgba(0,255,136,0.08);
-  --r:        #ff4060;
-  --r-dim:    rgba(255,64,96,0.12);
-  --y:        #f0c040;
-  --b:        #4fa3ff;
-  --text:     #c8d4e8;
-  --text2:    #5a6e8a;
-  --text3:    #3a4d65;
+  --bg:       #F9F8F6;
+  --bg1:      #FFFFFF;
+  --bg2:      #F3F1EC;
+  --bg3:      #EAE8E2;
+  --line:     rgba(0,0,0,0.07);
+  --line2:    rgba(0,0,0,0.13);
+  --g:        #E8632A;
+  --g2:       rgba(232,99,42,0.55);
+  --g-dim:    rgba(232,99,42,0.10);
+  --g-glow:   rgba(232,99,42,0.06);
+  --r:        #DC2626;
+  --r-dim:    rgba(220,38,38,0.10);
+  --y:        #D97706;
+  --b:        #2563EB;
+  --text:     #1C1917;
+  --text2:    #57534E;
+  --text3:    #A8A29E;
   --mono:     'JetBrains Mono', 'Courier New', monospace;
   --sans:     'Inter', system-ui, sans-serif;
   --nav-h:    44px;
@@ -26,21 +26,17 @@
   --r10:      10px;
 }
 
-html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; -webkit-font-smoothing: antialiased; }
 
-/* Scanlines */
-.scanlines {
-  pointer-events: none;
-  position: fixed; inset: 0; z-index: 9999;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.04) 2px, rgba(0,0,0,0.04) 4px);
-}
+/* Scanlines — hidden on light theme */
+.scanlines { display: none; }
 
 .mono { font-family: var(--mono); }
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 3px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 2px; }
 
 /* ─── Nav ─── */
 .nav {
@@ -48,7 +44,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   height: var(--nav-h);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 20px;
-  background: rgba(7,10,14,0.95);
+  background: rgba(255,255,255,0.97);
   border-bottom: 1px solid var(--line2);
   backdrop-filter: blur(12px);
 }
@@ -172,7 +168,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   position: relative;
 }
 .card:hover {
-  border-color: rgba(0,255,136,0.25);
+  border-color: rgba(232,99,42,0.30);
   background: var(--bg2);
 }
 .card.new { animation: fadeSlide .35s ease; }
@@ -364,16 +360,16 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 /* ─── Modal ─── */
 .modal-bg {
   display: none; position: fixed; inset: 0; z-index: 500;
-  background: rgba(4,7,12,0.85); backdrop-filter: blur(6px);
+  background: rgba(28,25,23,0.55); backdrop-filter: blur(6px);
   align-items: center; justify-content: center; padding: 16px;
 }
 .modal-bg.open { display: flex; }
 
 .modal-box {
-  background: var(--bg1); border: 1px solid rgba(0,255,136,0.18);
+  background: var(--bg1); border: 1px solid rgba(232,99,42,0.20);
   border-radius: 12px; width: 100%; max-width: 720px;
   max-height: 92vh; overflow-y: auto;
-  box-shadow: 0 0 60px rgba(0,255,136,0.06), 0 24px 80px rgba(0,0,0,0.7);
+  box-shadow: 0 0 40px rgba(232,99,42,0.08), 0 24px 60px rgba(0,0,0,0.15);
 }
 
 .modal-top {
@@ -452,7 +448,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   background: var(--bg3); border: 1px solid var(--line2); border-radius: var(--r6);
   padding: 0 10px; gap: 6px;
 }
-.amount-wrap:focus-within { border-color: rgba(0,255,136,0.4); }
+.amount-wrap:focus-within { border-color: rgba(232,99,42,0.50); }
 .amount-prefix, .amount-suffix { font-family: var(--mono); font-size: 12px; color: var(--text3); }
 .amount-wrap input {
   flex: 1; background: none; border: none; outline: none;
@@ -463,7 +459,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   padding: 9px 22px; border-radius: var(--r6); border: none;
   font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.8px;
   cursor: pointer; transition: all .14s;
-  background: var(--g); color: #000;
+  background: var(--g); color: #fff;
 }
 .exec-btn:hover { filter: brightness(1.15); }
 .exec-btn.sell { background: var(--r); color: #fff; }
