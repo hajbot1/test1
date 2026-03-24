@@ -84,15 +84,16 @@ async function fetchTokens() {
 
 async function fetchBySearch() {
   try {
-    // Search for pump.fun and bonk.fun tokens on solana
-    const [r1, r2] = await Promise.allSettled([
-      fetch(`${DS_BASE}/latest/dex/search?q=pump`).then(r => r.json()),
+    const [r1, r2, r3] = await Promise.allSettled([
+      fetch(`${DS_BASE}/latest/dex/search?q=pumpfun`).then(r => r.json()),
+      fetch(`${DS_BASE}/latest/dex/search?q=pumpswap`).then(r => r.json()),
       fetch(`${DS_BASE}/latest/dex/search?q=bonk`).then(r => r.json()),
     ]);
 
     const pairs = [
       ...(r1.status === 'fulfilled' ? (r1.value.pairs || []) : []),
       ...(r2.status === 'fulfilled' ? (r2.value.pairs || []) : []),
+      ...(r3.status === 'fulfilled' ? (r3.value.pairs || []) : []),
     ].filter(p => p.chainId === 'solana');
 
     processPairs(pairs, []);
@@ -108,66 +109,74 @@ function processPairs(pairs, profiles) {
   const iconMap = {};
   profiles.forEach(p => { if (p.icon) iconMap[p.tokenAddress] = p.icon; });
 
-  // Filter for pump.fun & bonk.fun
-  const relevant = pairs.filter(p => {
-    const dex = (p.dexId || '').toLowerCase();
-    const url = (p.url || '').toLowerCase();
-    return (
-      dex.includes('pump') || dex.includes('bonk') ||
-      url.includes('pump.fun') || url.includes('bonk.fun')
+  // Final Stretch: pumpfun (bonding curve) + bonk.fun bonding curve
+  // Migrated: raydium + pumpswap (PumpSwap = pump.fun's graduated-token AMM)
+  const fsPairs  = pairs.filter(p => isBondingCurveDex(p));
+  const migPairs = pairs.filter(p => isMigratedDex(p));
+
+  const fsEnriched  = fsPairs.map(p => enrichPair(p, iconMap, false));
+  const migEnriched = migPairs.map(p => enrichPair(p, iconMap, true));
+
+  // Final Stretch: fdv 8k–72k, sorted by fdv desc (closest to graduation first)
+  fsTokens = dedupe(
+    fsEnriched
+      .filter(t => t.fdv > 8000 && t.fdv < 72000)
+      .sort((a, b) => b.fdv - a.fdv)
+      .slice(0, 20)
+  );
+
+  // Also fetch dedicated migrated results
+  fetchMigrated().then(extra => {
+    migTokens = dedupe([...migEnriched, ...extra]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 20)
     );
-  });
-
-  const enriched = relevant.map(p => enrichPair(p, iconMap));
-
-  // Separate: Final Stretch = fdv between 8k-100k (still on bonding curve)
-  // Migrated = fdv > 69k and on raydium/orca or flagged as graduated
-  const finalStretch = enriched.filter(t =>
-    t.fdv > 8000 && t.fdv < 72000 && t.source !== 'migrated'
-  ).sort((a, b) => b.fdv - a.fdv).slice(0, 20);
-
-  const migrated = enriched.filter(t =>
-    t.fdv >= 69000 || t.source === 'migrated'
-  ).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
-
-  // Also try to fetch some migrated (raydium) pairs
-  fetchMigrated(enriched.map(t => t.baseAddress)).then(migs => {
-    const allMig = [...migrated, ...migs].slice(0, 20);
-    migTokens = dedupe(allMig);
     renderMigrated();
   });
 
-  fsTokens = dedupe(finalStretch);
   renderFinalStretch();
   setLoading(false);
 }
 
-async function fetchMigrated(knownAddrs) {
-  // Search for recently graduated pump.fun tokens (now on raydium)
+// pump.fun bonding curve dexes
+function isBondingCurveDex(p) {
+  const dex = (p.dexId || '').toLowerCase();
+  const url = (p.url || '').toLowerCase();
+  return dex === 'pumpfun' || dex === 'bonk' ||
+    url.includes('pump.fun') || url.includes('bonk.fun');
+}
+
+// Graduated dexes: Raydium or PumpSwap
+function isMigratedDex(p) {
+  const dex = (p.dexId || '').toLowerCase();
+  return dex === 'raydium' || dex === 'pumpswap' || dex === 'pump-swap';
+}
+
+async function fetchMigrated() {
+  // Explicitly search for pumpswap and raydium graduated tokens
   try {
-    const res = await fetch(`${DS_BASE}/latest/dex/search?q=pump%20sol`);
-    const data = await res.json();
-    const pairs = (data.pairs || []).filter(p =>
-      p.chainId === 'solana' &&
-      (p.dexId === 'raydium' || p.dexId === 'orca' || p.dexId === 'meteora') &&
-      p.fdv > 69000
-    ).slice(0, 20);
-    return pairs.map(p => enrichPair(p, {}));
+    const [r1, r2] = await Promise.allSettled([
+      fetch(`${DS_BASE}/latest/dex/search?q=pumpswap`).then(r => r.json()),
+      fetch(`${DS_BASE}/latest/dex/search?q=raydium%20pump`).then(r => r.json()),
+    ]);
+    const raw = [
+      ...(r1.status === 'fulfilled' ? (r1.value.pairs || []) : []),
+      ...(r2.status === 'fulfilled' ? (r2.value.pairs || []) : []),
+    ].filter(p => p.chainId === 'solana' && isMigratedDex(p));
+    return raw.map(p => enrichPair(p, {}, true));
   } catch { return []; }
 }
 
-function enrichPair(p, iconMap) {
+function enrichPair(p, iconMap, isMigrated = false) {
   const base = p.baseToken || {};
   const addr = base.address || '';
   const dex = (p.dexId || '').toLowerCase();
   const url = (p.url || '').toLowerCase();
 
   let source = 'other';
-  if (dex.includes('pump') || url.includes('pump.fun')) source = 'pump';
-  else if (dex.includes('bonk') || url.includes('bonk.fun')) source = 'bonk';
-
-  // Determine if migrated (graduated from bonding curve)
-  const isMigrated = dex === 'raydium' || dex === 'orca' || dex === 'meteora';
+  if (dex === 'pumpfun' || url.includes('pump.fun')) source = 'pump';
+  else if (dex === 'bonk' || url.includes('bonk.fun')) source = 'bonk';
+  else if (dex === 'pumpswap' || dex === 'pump-swap') source = 'pumpswap';
 
   const fdv = p.fdv || (p.marketCap) || 0;
   const mcap = p.marketCap || fdv;
@@ -271,10 +280,16 @@ function buildCard(tok, isMig) {
     ? '<span class="src-badge src-pump">pump.fun</span>'
     : tok.source === 'bonk'
     ? '<span class="src-badge src-bonk">bonk.fun</span>'
+    : tok.source === 'pumpswap'
+    ? '<span class="src-badge src-pumpswap">pumpswap</span>'
     : '<span class="src-badge src-other">sol</span>';
 
+  // Show which DEX the migrated token landed on
+  const migDexLabel = isMig
+    ? (tok.dexId === 'raydium' ? 'Raydium' : tok.dexId === 'pumpswap' || tok.dexId === 'pump-swap' ? 'PumpSwap' : tok.dexId || 'DEX')
+    : '';
   const dexBadge = isMig
-    ? `<span class="mig-dex">↑ ${tok.dexId || 'DEX'}</span>`
+    ? `<span class="mig-dex">↑ ${migDexLabel}</span>`
     : '';
 
   const progressBlock = isMig ? `

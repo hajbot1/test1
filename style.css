@@ -237,6 +237,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 }
 .src-pump { background: rgba(255,140,66,0.12); color: #ff8c42; border: 1px solid rgba(255,140,66,0.2); }
 .src-bonk { background: rgba(255,192,0,0.1); color: #ffc000; border: 1px solid rgba(255,192,0,0.2); }
+.src-pumpswap { background: rgba(0,200,255,0.1); color: #00c8ff; border: 1px solid rgba(0,200,255,0.2); }
 .src-other { background: var(--bg3); color: var(--text3); border: 1px solid var(--line); }
 
 /* Migrated extra */
