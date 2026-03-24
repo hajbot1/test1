@@ -1,132 +1,207 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Claude Trades</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="style.css"/>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/luxon@3.4.4/build/global/luxon.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon@1.3.1/dist/chartjs-adapter-luxon.umd.min.js"></script>
 </head>
 <body>
-  <!-- Top Nav -->
-  <nav class="topnav">
-    <div class="nav-left">
-      <span class="logo">⚡ Claude Trades</span>
-      <span class="chain-badge">◎ SOL</span>
-    </div>
-    <div class="nav-right">
-      <div class="paper-balance">
-        <span class="balance-label">Paper Balance</span>
-        <span class="balance-amount" id="paperBalance">◎ 100.00</span>
-      </div>
-      <div class="pnl-display">
-        <span class="pnl-label">P&amp;L</span>
-        <span class="pnl-amount" id="pnlDisplay">+◎ 0.00</span>
-      </div>
-      <button class="reset-btn" onclick="resetPaperTrading()">Reset</button>
-    </div>
-  </nav>
 
-  <!-- Main Layout -->
-  <div class="main-layout">
+<!-- HUD scanline overlay -->
+<div class="scanlines"></div>
 
-    <!-- Final Stretch Column -->
-    <div class="column" id="col-finalstretch">
-      <div class="col-header">
-        <div class="col-title">
-          <span class="col-icon">🏁</span>
-          <span>Final Stretch</span>
-          <span class="col-subtitle">above 10k · near bonding curve</span>
-        </div>
-        <div class="col-meta">
-          <span class="live-dot"></span>
-          <span class="live-label">LIVE</span>
-        </div>
+<!-- Top Nav -->
+<nav class="nav">
+  <div class="nav-brand">
+    <span class="brand-mark">◈</span>
+    <span class="brand-name">CLAUDE<span class="brand-accent">TRADES</span></span>
+    <div class="chain-pill">
+      <span class="chain-dot"></span>
+      SOL
+    </div>
+  </div>
+  <div class="nav-status">
+    <div class="status-item">
+      <span class="status-label">BALANCE</span>
+      <span class="status-val mono" id="navBalance">◎ 100.00</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">
+      <span class="status-label">NET P&amp;L</span>
+      <span class="status-val mono pnl-val" id="navPnl">+◎ 0.00</span>
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item status-live">
+      <span class="live-pulse"></span>
+      <span class="status-label">LIVE</span>
+    </div>
+  </div>
+</nav>
+
+<!-- Body -->
+<div class="workspace">
+
+  <!-- Final Stretch Column -->
+  <section class="col" id="col-fs">
+    <div class="col-head">
+      <div class="col-head-left">
+        <span class="col-label">FINAL STRETCH</span>
+        <span class="col-desc">pump.fun · bonk.fun · near graduation</span>
       </div>
-      <div class="token-list" id="finalStretchList"></div>
+      <div class="col-head-right">
+        <span class="token-count mono" id="fsCount">0</span>
+        <button class="refresh-btn" onclick="fetchTokens()" title="Refresh">↺</button>
+      </div>
+    </div>
+    <div class="col-body" id="fsList">
+      <div class="loading-state" id="fsLoading">
+        <div class="spinner"></div>
+        <span>Fetching from DexScreener…</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Migrated Column -->
+  <section class="col" id="col-mig">
+    <div class="col-head">
+      <div class="col-head-left">
+        <span class="col-label">MIGRATED</span>
+        <span class="col-desc">graduated · on raydium / orca</span>
+      </div>
+      <div class="col-head-right">
+        <span class="token-count mono" id="migCount">0</span>
+      </div>
+    </div>
+    <div class="col-body" id="migList">
+      <div class="loading-state" id="migLoading">
+        <div class="spinner"></div>
+        <span>Fetching from DexScreener…</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- P&L Panel -->
+  <aside class="pnl-panel">
+    <div class="panel-head">
+      <span class="col-label">PORTFOLIO</span>
+      <button class="reset-btn" onclick="resetAccount()">RESET</button>
     </div>
 
-    <!-- Migrated Column -->
-    <div class="column" id="col-migrated">
-      <div class="col-header">
-        <div class="col-title">
-          <span class="col-icon">🚀</span>
-          <span>Migrated</span>
-          <span class="col-subtitle">graduated · on-chain DEX</span>
+    <div class="pnl-summary">
+      <div class="pnl-row">
+        <span class="pnl-metric">Balance</span>
+        <span class="pnl-metric-val mono" id="pBalance">◎ 100.00</span>
+      </div>
+      <div class="pnl-row">
+        <span class="pnl-metric">Invested</span>
+        <span class="pnl-metric-val mono" id="pInvested">◎ 0.00</span>
+      </div>
+      <div class="pnl-row">
+        <span class="pnl-metric">Realised P&amp;L</span>
+        <span class="pnl-metric-val mono" id="pRealised">◎ 0.00</span>
+      </div>
+      <div class="pnl-row pnl-total-row">
+        <span class="pnl-metric">Net P&amp;L</span>
+        <span class="pnl-metric-val mono big" id="pNet">+◎ 0.00</span>
+      </div>
+    </div>
+
+    <div class="positions-head">
+      <span class="col-label" style="font-size:10px">OPEN POSITIONS</span>
+    </div>
+    <div class="positions-list" id="positionsList">
+      <div class="empty-state">No open positions</div>
+    </div>
+
+    <div class="history-head">
+      <span class="col-label" style="font-size:10px">TRADE LOG</span>
+    </div>
+    <div class="history-list" id="historyList">
+      <div class="empty-state">No trades yet</div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- Chart / Trade Modal -->
+<div class="modal-bg" id="modal" onclick="handleModalBg(event)">
+  <div class="modal-box">
+
+    <div class="modal-top">
+      <div class="modal-token-id">
+        <img class="modal-icon" id="mIcon" src="" onerror="this.style.display='none'"/>
+        <div class="modal-icon-fallback" id="mIconFb"></div>
+        <div>
+          <div class="modal-tname" id="mName">—</div>
+          <div class="modal-tsym" id="mSym">—</div>
         </div>
-        <div class="col-meta">
-          <span class="live-dot"></span>
-          <span class="live-label">LIVE</span>
+        <div class="modal-price-block">
+          <span class="modal-price mono" id="mPrice">—</span>
+          <span class="modal-chg" id="mChg">—</span>
         </div>
       </div>
-      <div class="token-list" id="migratedList"></div>
+      <button class="close-btn" onclick="closeModal()">✕</button>
+    </div>
+
+    <div class="modal-stats-row">
+      <div class="mstat"><span class="mstat-l">MCAP</span><span class="mstat-v mono" id="mMcap">—</span></div>
+      <div class="mstat"><span class="mstat-l">VOL 24H</span><span class="mstat-v mono" id="mVol">—</span></div>
+      <div class="mstat"><span class="mstat-l">LIQ</span><span class="mstat-v mono" id="mLiq">—</span></div>
+      <div class="mstat"><span class="mstat-l">BUYS</span><span class="mstat-v mono green" id="mBuys">—</span></div>
+      <div class="mstat"><span class="mstat-l">SELLS</span><span class="mstat-v mono red" id="mSells">—</span></div>
+      <div class="mstat"><span class="mstat-l">AGE</span><span class="mstat-v mono" id="mAge">—</span></div>
+    </div>
+
+    <div class="chart-wrap">
+      <canvas id="chart"></canvas>
+    </div>
+
+    <!-- Trade Controls -->
+    <div class="trade-area">
+      <div class="trade-tabs">
+        <button class="ttab active" id="tBuy" onclick="setTab('buy')">BUY</button>
+        <button class="ttab" id="tSell" onclick="setTab('sell')">SELL</button>
+      </div>
+      <div class="trade-body">
+        <div class="tinfo-row">
+          <span class="tinfo-l">Available</span>
+          <span class="tinfo-v mono" id="tAvail">◎ 0</span>
+        </div>
+        <div class="tinfo-row" id="holdingRow" style="display:none">
+          <span class="tinfo-l">Holding</span>
+          <span class="tinfo-v mono" id="tHolding">—</span>
+        </div>
+        <div class="quick-row" id="quickRow">
+          <button class="qbtn" onclick="setAmt(0.1)">0.1◎</button>
+          <button class="qbtn" onclick="setAmt(0.5)">0.5◎</button>
+          <button class="qbtn" onclick="setAmt(1)">1◎</button>
+          <button class="qbtn" onclick="setAmt(5)">5◎</button>
+          <button class="qbtn" onclick="setAmt(10)">10◎</button>
+        </div>
+        <div class="input-row">
+          <div class="amount-wrap">
+            <span class="amount-prefix" id="amtPrefix">◎</span>
+            <input id="amtInput" class="mono" type="number" placeholder="0.00" min="0.01" step="0.01"/>
+            <span class="amount-suffix" id="amtSuffix">SOL</span>
+          </div>
+          <button class="exec-btn" id="execBtn" onclick="executeTrade()">BUY</button>
+        </div>
+        <div class="trade-msg" id="tradeMsg"></div>
+      </div>
     </div>
 
   </div>
+</div>
 
-  <!-- Chart Modal -->
-  <div class="modal-overlay" id="chartModal" onclick="closeModal(event)">
-    <div class="modal-content">
-      <div class="modal-header">
-        <div class="modal-token-info">
-          <div class="modal-icon" id="modalIcon"></div>
-          <div>
-            <div class="modal-name" id="modalName"></div>
-            <div class="modal-symbol" id="modalSymbol"></div>
-          </div>
-          <div class="modal-price-block">
-            <span class="modal-price" id="modalPrice"></span>
-            <span class="modal-change" id="modalChange"></span>
-          </div>
-        </div>
-        <button class="modal-close" onclick="closeChart()">✕</button>
-      </div>
+<!-- Toast -->
+<div class="toast" id="toast"></div>
 
-      <div class="modal-stats">
-        <div class="stat-item"><span class="stat-label">Market Cap</span><span class="stat-val" id="modalMcap"></span></div>
-        <div class="stat-item"><span class="stat-label">Volume 24h</span><span class="stat-val" id="modalVol"></span></div>
-        <div class="stat-item"><span class="stat-label">Holders</span><span class="stat-val" id="modalHolders"></span></div>
-        <div class="stat-item"><span class="stat-label">Age</span><span class="stat-val" id="modalAge"></span></div>
-        <div class="stat-item"><span class="stat-label">Txns</span><span class="stat-val" id="modalTxns"></span></div>
-        <div class="stat-item"><span class="stat-label">Buys/Sells</span><span class="stat-val" id="modalBuySell"></span></div>
-      </div>
-
-      <div class="chart-container">
-        <canvas id="priceChart"></canvas>
-      </div>
-
-      <!-- Paper Trading Panel -->
-      <div class="trade-panel">
-        <div class="trade-tabs">
-          <button class="trade-tab active" id="tabBuy" onclick="switchTab('buy')">Buy</button>
-          <button class="trade-tab" id="tabSell" onclick="switchTab('sell')">Sell</button>
-        </div>
-        <div class="trade-body">
-          <div class="trade-info-row">
-            <span>Available: <strong id="availableBalance"></strong></span>
-            <span>Holdings: <strong id="tokenHoldings"></strong></span>
-          </div>
-          <div class="quick-amounts" id="quickAmounts">
-            <button onclick="setAmount(0.1)">0.1 ◎</button>
-            <button onclick="setAmount(0.5)">0.5 ◎</button>
-            <button onclick="setAmount(1)">1 ◎</button>
-            <button onclick="setAmount(5)">5 ◎</button>
-          </div>
-          <div class="trade-input-row">
-            <input type="number" id="tradeAmount" placeholder="Amount (SOL)" min="0.01" step="0.01" />
-            <button class="exec-btn buy-btn" id="execBtn" onclick="executeTrade()">Buy</button>
-          </div>
-          <div class="trade-result" id="tradeResult"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Toast -->
-  <div class="toast" id="toast"></div>
-
-  <script src="app.js"></script>
+<script src="app.js"></script>
 </body>
 </html>

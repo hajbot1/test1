@@ -1,269 +1,434 @@
-/* ─── Claude Trades — app.js ─── */
+// ── Claude Trades — app.js ──────────────────────────────────────────────────
 
 // ── Paper Trading State ──────────────────────────────────────────────────────
-let paperBalance = parseFloat(localStorage.getItem('ct_balance') ?? '100');
-let positions = JSON.parse(localStorage.getItem('ct_positions') ?? '{}');
-let tradeHistory = JSON.parse(localStorage.getItem('ct_history') ?? '[]');
-let initialBalance = parseFloat(localStorage.getItem('ct_initial') ?? '100');
-let currentTab = 'buy';
+const SOL_USD = 150; // approximate SOL price for calc purposes
+
+let balance  = parseFloat(localStorage.getItem('ct_bal')  ?? '100');
+let realised = parseFloat(localStorage.getItem('ct_real') ?? '0');
+let positions = JSON.parse(localStorage.getItem('ct_pos')  ?? '{}');
+let history   = JSON.parse(localStorage.getItem('ct_hist') ?? '[]');
+const INIT_BAL = 100;
+
+// ── Active token for modal ───────────────────────────────────────────────────
 let activeToken = null;
-let priceChartInstance = null;
+let chartInst   = null;
+let tradeTab    = 'buy';
 
-// ── Token Data Generators ────────────────────────────────────────────────────
-const EMOJIS = ['🐸','🦊','🚀','🌙','💎','🐕','🦁','🐉','⚡','🔥','🌊','🎯','🍌','🐻','🦄','🌟','🤖','👻','🍀','🎪'];
-const SUFFIXES = ['inu','fi','dao','moon','pump','base','ai','pepe','doge','cat','sol','meme','frog','gem','coin','x','swap'];
-const PREFIXES = ['baby','degen','mega','ultra','super','alpha','chad','giga','turbo','hyper','neon','cyber','sonic','dark'];
+// ── Token stores ─────────────────────────────────────────────────────────────
+let fsTokens  = [];  // final stretch
+let migTokens = [];  // migrated
 
-function rnd(min, max) { return Math.random() * (max - min) + min; }
-function rndInt(min, max) { return Math.floor(rnd(min, max + 1)); }
-function pick(arr) { return arr[rndInt(0, arr.length - 1)]; }
-
-function fmtNum(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+// ── Helpers ──────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const fmtN = n => {
+  if (!n) return '—';
+  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1)+'K';
   return n.toFixed(0);
-}
-function fmtPrice(p) {
-  if (p < 0.000001) return p.toExponential(2);
-  if (p < 0.001) return p.toFixed(6);
+};
+const fmtP = p => {
+  if (!p || p === 0) return '—';
+  if (p < 1e-8) return p.toExponential(2);
+  if (p < 0.0001) return p.toFixed(8);
+  if (p < 0.01) return p.toFixed(6);
   if (p < 1) return p.toFixed(4);
   return p.toFixed(2);
-}
-function fmtAge(secs) {
-  if (secs < 60) return secs + 's';
-  if (secs < 3600) return Math.floor(secs / 60) + 'm';
-  return Math.floor(secs / 3600) + 'h';
-}
-function colorForProgress(p) {
-  if (p >= 90) return '#ff3b5c';
-  if (p >= 75) return '#f0c040';
-  if (p >= 50) return '#4f80ff';
-  return '#00d18c';
+};
+const fmtAge = ts => {
+  const s = Math.floor((Date.now() - ts * 1000) / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s/60) + 'm';
+  if (s < 86400) return Math.floor(s/3600) + 'h';
+  return Math.floor(s/86400) + 'd';
+};
+const progressColor = pct => {
+  if (pct >= 90) return '#ff4060';
+  if (pct >= 70) return '#f0c040';
+  if (pct >= 40) return '#4fa3ff';
+  return '#00ff88';
+};
+
+// ── DexScreener API ──────────────────────────────────────────────────────────
+const DS_BASE = 'https://api.dexscreener.com';
+
+async function fetchTokens() {
+  setLoading(true);
+
+  try {
+    // 1. Get latest Solana token profiles
+    const profRes = await fetch(`${DS_BASE}/token-profiles/latest/v1`);
+    const profiles = await profRes.json();
+
+    const solProfiles = Array.isArray(profiles)
+      ? profiles.filter(p => p.chainId === 'solana').slice(0, 50)
+      : [];
+
+    if (solProfiles.length === 0) {
+      // fallback: search directly
+      await fetchBySearch();
+      return;
+    }
+
+    const addrs = solProfiles.map(p => p.tokenAddress).join(',');
+    const pairsRes = await fetch(`${DS_BASE}/latest/dex/tokens/${addrs}`);
+    const pairsData = await pairsRes.json();
+    const pairs = pairsData.pairs || [];
+
+    processPairs(pairs, solProfiles);
+  } catch (err) {
+    console.warn('Profile fetch failed, trying search fallback:', err);
+    await fetchBySearch();
+  }
 }
 
-function makeName() {
-  const style = rndInt(0, 2);
-  if (style === 0) return pick(PREFIXES) + pick(SUFFIXES);
-  if (style === 1) return pick(PREFIXES) + pick(EMOJIS).replace(/[^\w]/g,'') + pick(SUFFIXES);
-  return pick(PREFIXES) + (Math.random() > 0.5 ? pick(PREFIXES) : '') + pick(SUFFIXES);
+async function fetchBySearch() {
+  try {
+    // Search for pump.fun and bonk.fun tokens on solana
+    const [r1, r2] = await Promise.allSettled([
+      fetch(`${DS_BASE}/latest/dex/search?q=pump`).then(r => r.json()),
+      fetch(`${DS_BASE}/latest/dex/search?q=bonk`).then(r => r.json()),
+    ]);
+
+    const pairs = [
+      ...(r1.status === 'fulfilled' ? (r1.value.pairs || []) : []),
+      ...(r2.status === 'fulfilled' ? (r2.value.pairs || []) : []),
+    ].filter(p => p.chainId === 'solana');
+
+    processPairs(pairs, []);
+  } catch (err) {
+    console.error('Search also failed:', err);
+    setLoading(false);
+    showToast('Failed to fetch tokens', 'r');
+  }
 }
 
-function makeToken(type) {
-  const name = makeName();
-  const symbol = name.slice(0, 5).toUpperCase();
-  const emoji = pick(EMOJIS);
-  const bg = `hsl(${rndInt(0,360)},60%,22%)`;
-  const price = type === 'migrated' ? rnd(0.00001, 0.005) : rnd(0.000001, 0.0001);
-  const mcap = type === 'migrated' ? rnd(69000, 500000) : rnd(10000, 68000);
-  const vol24 = rnd(mcap * 0.05, mcap * 0.6);
-  const holders = type === 'migrated' ? rndInt(300, 3000) : rndInt(50, 450);
-  const progress = type === 'migrated' ? 100 : rnd(60, 99.5);
-  const change = rnd(-15, 80);
-  const ageSecs = type === 'migrated' ? rndInt(60, 7200) : rndInt(30, 3600);
-  const buys = rndInt(20, 300);
-  const sells = rndInt(5, buys);
-  const txns = buys + sells;
-  const dex = type === 'migrated' ? pick(['Raydium', 'Orca', 'Meteora']) : null;
+function processPairs(pairs, profiles) {
+  // Build icon map from profiles
+  const iconMap = {};
+  profiles.forEach(p => { if (p.icon) iconMap[p.tokenAddress] = p.icon; });
+
+  // Filter for pump.fun & bonk.fun
+  const relevant = pairs.filter(p => {
+    const dex = (p.dexId || '').toLowerCase();
+    const url = (p.url || '').toLowerCase();
+    return (
+      dex.includes('pump') || dex.includes('bonk') ||
+      url.includes('pump.fun') || url.includes('bonk.fun')
+    );
+  });
+
+  const enriched = relevant.map(p => enrichPair(p, iconMap));
+
+  // Separate: Final Stretch = fdv between 8k-100k (still on bonding curve)
+  // Migrated = fdv > 69k and on raydium/orca or flagged as graduated
+  const finalStretch = enriched.filter(t =>
+    t.fdv > 8000 && t.fdv < 72000 && t.source !== 'migrated'
+  ).sort((a, b) => b.fdv - a.fdv).slice(0, 20);
+
+  const migrated = enriched.filter(t =>
+    t.fdv >= 69000 || t.source === 'migrated'
+  ).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20);
+
+  // Also try to fetch some migrated (raydium) pairs
+  fetchMigrated(enriched.map(t => t.baseAddress)).then(migs => {
+    const allMig = [...migrated, ...migs].slice(0, 20);
+    migTokens = dedupe(allMig);
+    renderMigrated();
+  });
+
+  fsTokens = dedupe(finalStretch);
+  renderFinalStretch();
+  setLoading(false);
+}
+
+async function fetchMigrated(knownAddrs) {
+  // Search for recently graduated pump.fun tokens (now on raydium)
+  try {
+    const res = await fetch(`${DS_BASE}/latest/dex/search?q=pump%20sol`);
+    const data = await res.json();
+    const pairs = (data.pairs || []).filter(p =>
+      p.chainId === 'solana' &&
+      (p.dexId === 'raydium' || p.dexId === 'orca' || p.dexId === 'meteora') &&
+      p.fdv > 69000
+    ).slice(0, 20);
+    return pairs.map(p => enrichPair(p, {}));
+  } catch { return []; }
+}
+
+function enrichPair(p, iconMap) {
+  const base = p.baseToken || {};
+  const addr = base.address || '';
+  const dex = (p.dexId || '').toLowerCase();
+  const url = (p.url || '').toLowerCase();
+
+  let source = 'other';
+  if (dex.includes('pump') || url.includes('pump.fun')) source = 'pump';
+  else if (dex.includes('bonk') || url.includes('bonk.fun')) source = 'bonk';
+
+  // Determine if migrated (graduated from bonding curve)
+  const isMigrated = dex === 'raydium' || dex === 'orca' || dex === 'meteora';
+
+  const fdv = p.fdv || (p.marketCap) || 0;
+  const mcap = p.marketCap || fdv;
+  const price = parseFloat(p.priceUsd || 0);
+  const vol24 = p.volume?.h24 || 0;
+  const liq = p.liquidity?.usd || 0;
+  const buys24 = p.txns?.h24?.buys || 0;
+  const sells24 = p.txns?.h24?.sells || 0;
+  const chg24 = p.priceChange?.h24 || 0;
+  const createdAt = p.pairCreatedAt ? Math.floor(p.pairCreatedAt / 1000) : Math.floor(Date.now()/1000);
+
+  // Bonding curve progress — pump.fun graduates at ~$69k fdv
+  const GRAD_FDV = 69000;
+  const progress = isMigrated ? 100 : Math.min(99.9, (fdv / GRAD_FDV) * 100);
 
   return {
-    id: Math.random().toString(36).slice(2),
-    name, symbol, emoji, bg, price, mcap, vol24,
-    holders, progress, change, ageSecs, buys, sells, txns,
-    type, dex, createdAt: Date.now(),
-    priceHistory: generatePriceHistory(price, type),
+    id: p.pairAddress || addr,
+    name: base.name || '—',
+    symbol: base.symbol || '—',
+    baseAddress: addr,
+    pairAddress: p.pairAddress || '',
+    icon: iconMap[addr] || null,
+    price, fdv, mcap, vol24, liq,
+    buys24, sells24,
+    chg24, createdAt,
+    progress, source,
+    dexId: p.dexId || '',
+    dexUrl: p.url || '',
+    isMigrated,
+    // synthetic price history (we don't have OHLCV for free)
+    priceHistory: buildPriceHistory(price, chg24),
   };
 }
 
-function generatePriceHistory(currentPrice, type) {
+function buildPriceHistory(currentPrice, chg24) {
   const points = 60;
   const history = [];
-  let p = currentPrice * rnd(0.3, 0.7);
+  const startPrice = currentPrice / (1 + chg24 / 100);
+  let p = startPrice;
   const now = Date.now();
   for (let i = 0; i < points; i++) {
     const t = now - (points - i) * 60000;
-    const drift = type === 'migrated' ? rnd(0.98, 1.06) : rnd(0.95, 1.12);
-    p *= drift;
-    const high = p * rnd(1.0, 1.04);
-    const low = p * rnd(0.96, 1.0);
-    const open = history.length ? history[history.length - 1].close : p * rnd(0.97, 1.03);
-    const close = p;
-    history.push({ t, open, high, low, close });
+    const progress = i / points;
+    // interpolate toward current with noise
+    const target = startPrice + (currentPrice - startPrice) * progress;
+    p = target * (1 + (Math.random() - 0.5) * 0.04);
+    history.push({ t, v: p });
   }
+  history[history.length - 1].v = currentPrice;
   return history;
 }
 
-// ── State ────────────────────────────────────────────────────────────────────
-let finalStretchTokens = [];
-let migratedTokens = [];
-
-function initTokens() {
-  finalStretchTokens = Array.from({ length: 12 }, () => makeToken('finalstretch'));
-  migratedTokens = Array.from({ length: 10 }, () => makeToken('migrated'));
+function dedupe(arr) {
+  const seen = new Set();
+  return arr.filter(t => {
+    if (seen.has(t.id)) return false;
+    seen.add(t.id);
+    return true;
+  });
 }
 
-// ── Rendering ────────────────────────────────────────────────────────────────
+function setLoading(on) {
+  $('fsLoading').style.display = on ? 'flex' : 'none';
+  $('migLoading').style.display = on ? 'flex' : 'none';
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
 function renderFinalStretch() {
-  const list = document.getElementById('finalStretchList');
+  const list = $('fsList');
   list.innerHTML = '';
-  finalStretchTokens.forEach(tok => {
-    list.appendChild(buildCard(tok));
-  });
+  $('fsCount').textContent = fsTokens.length;
+  if (fsTokens.length === 0) {
+    list.innerHTML = '<div class="empty-state">No tokens found</div>';
+    return;
+  }
+  fsTokens.forEach(t => list.appendChild(buildCard(t, false)));
 }
 
 function renderMigrated() {
-  const list = document.getElementById('migratedList');
+  const list = $('migList');
   list.innerHTML = '';
-  migratedTokens.forEach(tok => {
-    list.appendChild(buildCard(tok));
-  });
+  $('migCount').textContent = migTokens.length;
+  if (migTokens.length === 0) {
+    list.innerHTML = '<div class="empty-state">No migrated tokens found</div>';
+    return;
+  }
+  migTokens.forEach(t => list.appendChild(buildCard(t, true)));
 }
 
-function buildCard(tok) {
-  const card = document.createElement('div');
-  card.className = 'token-card';
-  card.dataset.id = tok.id;
+function buildCard(tok, isMig) {
+  const div = document.createElement('div');
+  div.className = 'card';
+  div.dataset.id = tok.id;
 
-  const progressColor = colorForProgress(tok.progress);
-  const changeSign = tok.change >= 0 ? '+' : '';
-  const changeClass = tok.change >= 0 ? 'positive' : 'negative';
-  const isMigrated = tok.type === 'migrated';
+  const chgSign = tok.chg24 >= 0 ? '+' : '';
+  const chgCls  = tok.chg24 >= 0 ? 'up' : 'dn';
+  const pColor  = progressColor(tok.progress);
+  const pWidth  = Math.min(100, tok.progress);
 
-  card.innerHTML = `
-    <div class="card-top">
-      <div class="card-left">
-        <div class="token-icon" style="background:${tok.bg}">${tok.emoji}</div>
-        <div class="token-name-row">
-          <span class="token-name">${tok.name}</span>
-          <span class="token-symbol">$${tok.symbol} ${isMigrated ? `<span class="migrated-badge">🚀 ${tok.dex}</span>` : ''}</span>
-        </div>
-      </div>
-      <div class="card-right">
-        <span class="token-age">${fmtAge(tok.ageSecs)}</span>
-        <span class="token-change ${changeClass}">${changeSign}${tok.change.toFixed(1)}%</span>
-      </div>
-    </div>
+  const srcBadge = tok.source === 'pump'
+    ? '<span class="src-badge src-pump">pump.fun</span>'
+    : tok.source === 'bonk'
+    ? '<span class="src-badge src-bonk">bonk.fun</span>'
+    : '<span class="src-badge src-other">sol</span>';
 
-    <div class="card-stats">
-      <div class="stat-box">
-        <div class="s-label">Market Cap</div>
-        <div class="s-val">$${fmtNum(tok.mcap)}</div>
-      </div>
-      <div class="stat-box">
-        <div class="s-label">Volume</div>
-        <div class="s-val">$${fmtNum(tok.vol24)}</div>
-      </div>
-      <div class="stat-box">
-        <div class="s-label">Holders</div>
-        <div class="s-val">${tok.holders.toLocaleString()}</div>
-      </div>
-    </div>
+  const dexBadge = isMig
+    ? `<span class="mig-dex">↑ ${tok.dexId || 'DEX'}</span>`
+    : '';
 
-    ${!isMigrated ? `
-    <div class="progress-section">
-      <div class="progress-label">
-        <span class="pl-left">Bonding Curve</span>
-        <span class="pl-right">${tok.progress.toFixed(1)}%</span>
+  const progressBlock = isMig ? `
+    <div class="c-progress">
+      <div class="c-prog-row">
+        <span>Buys / Sells (24h)</span>
+        <span class="c-prog-pct">${tok.buys24}B / ${tok.sells24}S</span>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" style="width:${tok.progress}%;background:linear-gradient(90deg,#4f80ff,${progressColor})"></div>
+      <div class="prog-track">
+        <div class="prog-fill" style="width:${tok.buys24+tok.sells24>0?Math.round(tok.buys24/(tok.buys24+tok.sells24)*100):50}%;background:linear-gradient(90deg,#00ff88,#4fa3ff)"></div>
       </div>
     </div>` : `
-    <div class="progress-section">
-      <div class="progress-label">
-        <span class="pl-left">Txns (24h)</span>
-        <span class="pl-right">${tok.txns} &nbsp;·&nbsp; <span style="color:#00d18c">${tok.buys}B</span> / <span style="color:#ff3b5c">${tok.sells}S</span></span>
+    <div class="c-progress">
+      <div class="c-prog-row">
+        <span>Bonding Curve</span>
+        <span class="c-prog-pct">${tok.progress.toFixed(1)}%</span>
       </div>
-      <div class="progress-bar">
-        <div class="progress-fill" style="width:${(tok.buys/tok.txns*100).toFixed(0)}%;background:linear-gradient(90deg,#00d18c,#4f80ff)"></div>
+      <div class="prog-track">
+        <div class="prog-fill" style="width:${pWidth}%;background:linear-gradient(90deg,#4fa3ff,${pColor})"></div>
       </div>
-    </div>`}
+    </div>`;
 
-    <div class="card-bottom">
-      <button class="quick-buy" onclick="quickTrade(event,'${tok.id}','buy',0.1)">Buy 0.1 ◎</button>
-      <button class="quick-sell" onclick="quickTrade(event,'${tok.id}','sell',null)">Sell</button>
-      <button class="chart-btn" onclick="openChart(event,'${tok.id}')">📈 Chart</button>
+  div.innerHTML = `
+    <div class="c-head">
+      <div class="c-left">
+        <div class="c-icon" id="icon-${tok.id}">
+          ${tok.icon ? `<img src="${tok.icon}" alt="" loading="lazy" onerror="this.parentNode.innerHTML='${esc(tok.symbol?.[0]??'?')}'"/>` : (tok.symbol?.[0] ?? '?')}
+        </div>
+        <div>
+          <div class="c-name">${esc(tok.name)}</div>
+          <div class="c-sym">$${esc(tok.symbol)} ${srcBadge} ${dexBadge}</div>
+        </div>
+      </div>
+      <div class="c-right">
+        <span class="c-age">${fmtAge(tok.createdAt)}</span>
+        <span class="c-chg ${chgCls}">${chgSign}${tok.chg24.toFixed(1)}%</span>
+      </div>
+    </div>
+
+    <div class="c-metrics">
+      <div class="c-metric">
+        <div class="cm-l">MCAP</div>
+        <div class="cm-v">$${fmtN(tok.mcap || tok.fdv)}</div>
+      </div>
+      <div class="c-metric">
+        <div class="cm-l">VOL 24H</div>
+        <div class="cm-v">$${fmtN(tok.vol24)}</div>
+      </div>
+      <div class="c-metric">
+        <div class="cm-l">PRICE</div>
+        <div class="cm-v ${tok.chg24>=0?'g':'r'}">$${fmtP(tok.price)}</div>
+      </div>
+    </div>
+
+    ${progressBlock}
+
+    <div class="c-footer">
+      <div class="c-footer-left" style="flex:1;display:flex;gap:4px">
+        <button class="btn-buy" onclick="quickBuy(event,'${tok.id}')">BUY 0.1◎</button>
+      </div>
+      <button class="btn-chart" onclick="openModal(event,'${tok.id}')">📈</button>
     </div>
   `;
-  return card;
+  return div;
 }
 
-// ── Chart Modal ──────────────────────────────────────────────────────────────
-function openChart(e, tokenId) {
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Modal ────────────────────────────────────────────────────────────────────
+function openModal(e, tokenId) {
   e && e.stopPropagation();
-  const tok = findToken(tokenId);
+  const tok = findTok(tokenId);
   if (!tok) return;
   activeToken = tok;
 
-  document.getElementById('modalIcon').textContent = tok.emoji;
-  document.getElementById('modalIcon').style.background = tok.bg;
-  document.getElementById('modalName').textContent = tok.name;
-  document.getElementById('modalSymbol').textContent = `$${tok.symbol}`;
-  document.getElementById('modalPrice').textContent = `$${fmtPrice(tok.price)}`;
+  // Icon
+  const mIcon = $('mIcon');
+  const mIconFb = $('mIconFb');
+  if (tok.icon) {
+    mIcon.src = tok.icon;
+    mIcon.style.display = 'block';
+    mIconFb.style.display = 'none';
+    mIcon.onerror = () => { mIcon.style.display='none'; mIconFb.style.display='flex'; mIconFb.textContent = tok.symbol?.[0]??'?'; };
+  } else {
+    mIcon.style.display = 'none';
+    mIconFb.style.display = 'flex';
+    mIconFb.textContent = tok.symbol?.[0] ?? '?';
+  }
 
-  const chg = tok.change;
-  const chgEl = document.getElementById('modalChange');
-  chgEl.textContent = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`;
-  chgEl.className = 'modal-change ' + (chg >= 0 ? 'positive' : 'negative');
+  $('mName').textContent = tok.name;
+  $('mSym').textContent = `$${tok.symbol}`;
+  $('mPrice').textContent = `$${fmtP(tok.price)}`;
 
-  document.getElementById('modalMcap').textContent = `$${fmtNum(tok.mcap)}`;
-  document.getElementById('modalVol').textContent = `$${fmtNum(tok.vol24)}`;
-  document.getElementById('modalHolders').textContent = tok.holders.toLocaleString();
-  document.getElementById('modalAge').textContent = fmtAge(tok.ageSecs);
-  document.getElementById('modalTxns').textContent = tok.txns.toLocaleString();
-  document.getElementById('modalBuySell').textContent = `${tok.buys}/${tok.sells}`;
+  const chgEl = $('mChg');
+  chgEl.textContent = `${tok.chg24>=0?'+':''}${tok.chg24.toFixed(2)}%`;
+  chgEl.className = 'modal-chg ' + (tok.chg24>=0?'up':'dn');
 
-  renderTradeInfo();
+  $('mMcap').textContent = '$' + fmtN(tok.mcap || tok.fdv);
+  $('mVol').textContent = '$' + fmtN(tok.vol24);
+  $('mLiq').textContent = '$' + fmtN(tok.liq);
+  $('mBuys').textContent = tok.buys24.toLocaleString();
+  $('mSells').textContent = tok.sells24.toLocaleString();
+  $('mAge').textContent = fmtAge(tok.createdAt);
+
+  setTab('buy');
   drawChart(tok);
-  document.getElementById('chartModal').classList.add('open');
+  refreshTradeUI();
+  $('modal').classList.add('open');
+}
+
+function closeModal() {
+  $('modal').classList.remove('open');
+  if (chartInst) { chartInst.destroy(); chartInst = null; }
+  activeToken = null;
+  $('tradeMsg').textContent = '';
+}
+
+function handleModalBg(e) {
+  if (e.target === $('modal')) closeModal();
 }
 
 function drawChart(tok) {
-  if (priceChartInstance) {
-    priceChartInstance.destroy();
-    priceChartInstance = null;
-  }
+  if (chartInst) { chartInst.destroy(); chartInst = null; }
+  const ctx = $('chart').getContext('2d');
+  const isUp = tok.chg24 >= 0;
+  const lc = isUp ? '#00ff88' : '#ff4060';
+  const fc = isUp ? 'rgba(0,255,136,0.07)' : 'rgba(255,64,96,0.07)';
 
-  const ctx = document.getElementById('priceChart').getContext('2d');
-  const labels = tok.priceHistory.map(d => new Date(d.t));
-  const closes = tok.priceHistory.map(d => d.close);
-  const isUp = closes[closes.length - 1] >= closes[0];
-  const lineColor = isUp ? '#00d18c' : '#ff3b5c';
-  const fillColor = isUp ? 'rgba(0,209,140,0.08)' : 'rgba(255,59,92,0.08)';
-
-  priceChartInstance = new Chart(ctx, {
+  chartInst = new Chart(ctx, {
     type: 'line',
     data: {
-      labels,
+      labels: tok.priceHistory.map(d => new Date(d.t)),
       datasets: [{
-        data: closes,
-        borderColor: lineColor,
-        backgroundColor: fillColor,
-        borderWidth: 2,
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        pointHoverRadius: 5,
-        pointHoverBackgroundColor: lineColor,
+        data: tok.priceHistory.map(d => d.v),
+        borderColor: lc, backgroundColor: fc,
+        borderWidth: 1.5, fill: true,
+        tension: 0.35, pointRadius: 0, pointHoverRadius: 4,
+        pointHoverBackgroundColor: lc,
       }]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      responsive: true, maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
       plugins: {
         legend: { display: false },
         tooltip: {
-          backgroundColor: '#1a1c27',
-          borderColor: '#2a2d45',
-          borderWidth: 1,
-          titleColor: '#9197c0',
-          bodyColor: '#e8eaf6',
+          backgroundColor: '#0f1520', borderColor: '#1a2535', borderWidth: 1,
+          titleColor: '#5a6e8a', bodyColor: '#c8d4e8',
           callbacks: {
-            title: items => {
-              const d = new Date(items[0].label);
-              return d.toLocaleTimeString();
-            },
-            label: item => `$${fmtPrice(item.raw)}`
+            title: items => new Date(items[0].label).toLocaleTimeString(),
+            label: item => `$${fmtP(item.raw)}`
           }
         }
       },
@@ -271,317 +436,255 @@ function drawChart(tok) {
         x: {
           type: 'time',
           time: { unit: 'minute', displayFormats: { minute: 'HH:mm' } },
-          grid: { color: 'rgba(42,45,69,0.6)', drawBorder: false },
-          ticks: { color: '#5c6494', maxTicksLimit: 8, font: { size: 10 } }
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#3a4d65', maxTicksLimit: 6, font: { family: "'JetBrains Mono'", size: 9 } }
         },
         y: {
-          grid: { color: 'rgba(42,45,69,0.6)', drawBorder: false },
+          position: 'right',
+          grid: { color: 'rgba(255,255,255,0.04)' },
           ticks: {
-            color: '#5c6494',
-            font: { size: 10 },
-            callback: v => `$${fmtPrice(v)}`
-          },
-          position: 'right'
+            color: '#3a4d65', font: { family: "'JetBrains Mono'", size: 9 },
+            callback: v => `$${fmtP(v)}`
+          }
         }
       }
     }
   });
 }
 
-function closeChart() {
-  document.getElementById('chartModal').classList.remove('open');
-  activeToken = null;
-  document.getElementById('tradeResult').textContent = '';
+// ── Paper Trading ─────────────────────────────────────────────────────────────
+function save() {
+  localStorage.setItem('ct_bal',  balance);
+  localStorage.setItem('ct_real', realised);
+  localStorage.setItem('ct_pos',  JSON.stringify(positions));
+  localStorage.setItem('ct_hist', JSON.stringify(history));
 }
 
-function closeModal(e) {
-  if (e.target === document.getElementById('chartModal')) closeChart();
+function getTotalPositionsValue() {
+  let total = 0;
+  for (const [id, pos] of Object.entries(positions)) {
+    const tok = findTok(id);
+    const price = tok ? tok.price : pos.avgPrice;
+    total += pos.amount * price * (1 / SOL_USD);
+  }
+  return total;
 }
 
-// ── Paper Trading ────────────────────────────────────────────────────────────
-function saveState() {
-  localStorage.setItem('ct_balance', paperBalance);
-  localStorage.setItem('ct_positions', JSON.stringify(positions));
-  localStorage.setItem('ct_history', JSON.stringify(tradeHistory));
-  localStorage.setItem('ct_initial', initialBalance);
+function getInvested() {
+  let total = 0;
+  for (const pos of Object.values(positions)) {
+    total += pos.solCost;
+  }
+  return total;
 }
 
-function updateNavBalance() {
-  document.getElementById('paperBalance').textContent = `◎ ${paperBalance.toFixed(2)}`;
-  const pnl = paperBalance - initialBalance;
-  const pnlEl = document.getElementById('pnlDisplay');
-  pnlEl.textContent = `${pnl >= 0 ? '+' : ''}◎ ${pnl.toFixed(2)}`;
-  pnlEl.className = 'pnl-amount' + (pnl < 0 ? ' negative' : '');
+function updateUI() {
+  const invested = getInvested();
+  const posVal = getTotalPositionsValue();
+  const netPnl = (balance - INIT_BAL) + realised + (posVal - invested);
+
+  $('navBalance').textContent = `◎ ${balance.toFixed(2)}`;
+  $('pBalance').textContent   = `◎ ${balance.toFixed(2)}`;
+  $('pInvested').textContent  = `◎ ${invested.toFixed(4)}`;
+  $('pRealised').textContent  = `${realised>=0?'+':''}◎ ${realised.toFixed(4)}`;
+
+  const netEl = $('pNet');
+  netEl.textContent = `${netPnl>=0?'+':''}◎ ${netPnl.toFixed(4)}`;
+  netEl.className = 'pnl-metric-val mono big' + (netPnl < 0 ? ' neg' : '');
+
+  const navPnl = $('navPnl');
+  navPnl.textContent = `${netPnl>=0?'+':''}◎ ${netPnl.toFixed(4)}`;
+  navPnl.className = 'status-val mono pnl-val' + (netPnl < 0 ? ' neg' : '');
+
+  renderPositions();
+  renderHistory();
 }
 
-function renderTradeInfo() {
-  if (!activeToken) return;
-  document.getElementById('availableBalance').textContent = `◎ ${paperBalance.toFixed(3)}`;
-  const pos = positions[activeToken.id];
-  document.getElementById('tokenHoldings').textContent = pos
-    ? `${pos.amount.toFixed(2)} tokens (◎ ${(pos.amount * activeToken.price / 1).toFixed(4)})`
-    : '—';
-  const isBuy = currentTab === 'buy';
-  const execBtn = document.getElementById('execBtn');
-  execBtn.textContent = isBuy ? 'Buy' : 'Sell';
-  execBtn.className = `exec-btn ${isBuy ? 'buy-btn' : 'sell-btn'}`;
+function renderPositions() {
+  const list = $('positionsList');
+  const ids = Object.keys(positions);
+  if (ids.length === 0) {
+    list.innerHTML = '<div class="empty-state">No open positions</div>';
+    return;
+  }
+  list.innerHTML = '';
+  ids.forEach(id => {
+    const pos = positions[id];
+    const tok = findTok(id);
+    const curPrice = tok ? tok.price : pos.avgPrice;
+    const curVal = pos.amount * curPrice * (1 / SOL_USD);
+    const pnlSol = curVal - pos.solCost;
+    const pnlPct = pos.solCost > 0 ? (pnlSol / pos.solCost * 100) : 0;
+
+    const div = document.createElement('div');
+    div.className = 'pos-item';
+    div.innerHTML = `
+      <div class="pos-row">
+        <div><div class="pos-name">${esc(pos.name)}</div><div class="pos-sym">$${esc(pos.symbol)}</div></div>
+        <div style="text-align:right">
+          <div class="pos-val">◎ ${curVal.toFixed(4)}</div>
+          <div class="pos-pnl ${pnlSol>=0?'pos':'neg'}">${pnlSol>=0?'+':''}◎ ${pnlSol.toFixed(4)} (${pnlPct.toFixed(1)}%)</div>
+        </div>
+      </div>
+      <div class="pos-row" style="margin-top:5px">
+        <span style="font-size:10px;color:var(--text3);font-family:var(--mono)">${fmtN(pos.amount)} tokens</span>
+        <button class="pos-sell-btn" onclick="sellAll('${id}')">SELL ALL</button>
+      </div>
+    `;
+    list.appendChild(div);
+  });
 }
 
-function switchTab(tab) {
-  currentTab = tab;
-  document.getElementById('tabBuy').classList.toggle('active', tab === 'buy');
-  document.getElementById('tabSell').classList.toggle('active', tab === 'sell');
-  const quickAmounts = document.getElementById('quickAmounts');
-  quickAmounts.style.display = tab === 'buy' ? 'flex' : 'none';
-  document.getElementById('tradeResult').textContent = '';
-  renderTradeInfo();
+function renderHistory() {
+  const list = $('historyList');
+  if (history.length === 0) {
+    list.innerHTML = '<div class="empty-state">No trades yet</div>';
+    return;
+  }
+  list.innerHTML = '';
+  [...history].reverse().slice(0, 30).forEach(h => {
+    const div = document.createElement('div');
+    div.className = 'hist-item';
+    div.innerHTML = `
+      <span class="hist-type ${h.type==='buy'?'b':'s'}">${h.type.toUpperCase()}</span>
+      <span class="hist-sym">$${esc(h.symbol)}</span>
+      <span class="hist-amt" style="margin-left:auto">◎ ${h.sol.toFixed(4)}</span>
+    `;
+    list.appendChild(div);
+  });
 }
 
-function setAmount(val) {
-  document.getElementById('tradeAmount').value = val;
+function setTab(tab) {
+  tradeTab = tab;
+  $('tBuy').classList.toggle('active', tab==='buy');
+  $('tSell').classList.toggle('active', tab==='sell');
+  const execBtn = $('execBtn');
+  execBtn.textContent = tab === 'buy' ? 'BUY' : 'SELL';
+  execBtn.className = `exec-btn ${tab==='sell'?'sell':''}`;
+  $('quickRow').style.display = tab==='buy'?'flex':'none';
+  const amtSuffix = $('amtSuffix');
+  amtSuffix.textContent = tab==='buy' ? 'SOL' : '%';
+  $('amtInput').placeholder = tab==='buy' ? '0.00' : '100';
+  $('tradeMsg').textContent = '';
+  refreshTradeUI();
 }
+
+function refreshTradeUI() {
+  $('tAvail').textContent = `◎ ${balance.toFixed(3)}`;
+  const pos = activeToken ? positions[activeToken.id] : null;
+  if (pos) {
+    $('holdingRow').style.display = 'flex';
+    const tok = findTok(activeToken.id);
+    const curPrice = tok ? tok.price : pos.avgPrice;
+    const curVal = pos.amount * curPrice * (1 / SOL_USD);
+    $('tHolding').textContent = `${fmtN(pos.amount)} tokens (◎ ${curVal.toFixed(4)})`;
+  } else {
+    $('holdingRow').style.display = 'none';
+  }
+}
+
+function setAmt(v) { $('amtInput').value = v; }
 
 function executeTrade() {
   if (!activeToken) return;
-  const amount = parseFloat(document.getElementById('tradeAmount').value);
-  if (isNaN(amount) || amount <= 0) {
-    setResult('Enter a valid amount.', 'err');
-    return;
-  }
+  const raw = parseFloat($('amtInput').value);
+  if (isNaN(raw) || raw <= 0) { setMsg('Enter a valid amount.', 'err'); return; }
 
-  const isBuy = currentTab === 'buy';
-  const solPrice = 150; // approximate SOL/USD for token amount calc
-  const tokenPrice = activeToken.price; // in USD
-  const solPerUsd = 1 / solPrice;
-
-  if (isBuy) {
-    if (amount > paperBalance) {
-      setResult(`Insufficient balance. Have ◎ ${paperBalance.toFixed(3)}.`, 'err');
-      return;
-    }
-    const usdSpent = amount * solPrice;
-    const tokensBought = usdSpent / tokenPrice;
-    paperBalance -= amount;
-
-    if (!positions[activeToken.id]) {
-      positions[activeToken.id] = { amount: 0, avgPrice: 0, symbol: activeToken.symbol, name: activeToken.name };
-    }
-    const pos = positions[activeToken.id];
-    const totalCost = (pos.avgPrice * pos.amount) + (tokenPrice * tokensBought);
-    pos.amount += tokensBought;
-    pos.avgPrice = totalCost / pos.amount;
-
-    tradeHistory.push({ type: 'buy', tokenId: activeToken.id, symbol: activeToken.symbol, solAmount: amount, tokens: tokensBought, price: tokenPrice, at: Date.now() });
-    saveState();
-    updateNavBalance();
-    renderTradeInfo();
-    setResult(`✓ Bought ${fmtNum(tokensBought)} $${activeToken.symbol} for ◎ ${amount}`, 'ok');
-    showToast(`Bought $${activeToken.symbol}`, 'green');
+  if (tradeTab === 'buy') {
+    executeBuy(activeToken.id, raw);
   } else {
-    // sell: amount here is fraction of position (0-100%)
-    const pos = positions[activeToken.id];
-    if (!pos || pos.amount <= 0) {
-      setResult(`No $${activeToken.symbol} position to sell.`, 'err');
-      return;
-    }
-    // treat input as % to sell or tokens directly — let's use % for simplicity
-    const pct = Math.min(amount, 100);
-    const tokensToSell = (pct / 100) * pos.amount;
-    const usdReceived = tokensToSell * tokenPrice;
-    const solReceived = usdReceived / solPrice;
-
-    pos.amount -= tokensToSell;
-    paperBalance += solReceived;
-    if (pos.amount < 0.0001) delete positions[activeToken.id];
-
-    tradeHistory.push({ type: 'sell', tokenId: activeToken.id, symbol: activeToken.symbol, solAmount: solReceived, tokens: tokensToSell, price: tokenPrice, at: Date.now() });
-    saveState();
-    updateNavBalance();
-    renderTradeInfo();
-    setResult(`✓ Sold ${pct}% of $${activeToken.symbol} for ◎ ${solReceived.toFixed(4)}`, 'ok');
-    showToast(`Sold $${activeToken.symbol}`, 'green');
+    const pct = Math.min(raw, 100);
+    executeSell(activeToken.id, pct);
   }
-  document.getElementById('tradeAmount').value = '';
+  $('amtInput').value = '';
 }
 
-function setResult(msg, cls) {
-  const el = document.getElementById('tradeResult');
-  el.textContent = msg;
-  el.className = 'trade-result ' + cls;
-}
-
-function quickTrade(e, tokenId, side, amount) {
-  e && e.stopPropagation();
-  const tok = findToken(tokenId);
+function executeBuy(tokenId, solAmt) {
+  if (solAmt > balance) { setMsg('Insufficient balance.', 'err'); return; }
+  const tok = findTok(tokenId);
   if (!tok) return;
-
-  if (side === 'buy') {
-    if (amount > paperBalance) {
-      showToast('Insufficient balance', 'red');
-      return;
-    }
-    const solPrice = 150;
-    const tokensBought = (amount * solPrice) / tok.price;
-    paperBalance -= amount;
-    if (!positions[tok.id]) positions[tok.id] = { amount: 0, avgPrice: 0, symbol: tok.symbol, name: tok.name };
-    const pos = positions[tok.id];
-    const totalCost = (pos.avgPrice * pos.amount) + (tok.price * tokensBought);
-    pos.amount += tokensBought;
-    pos.avgPrice = totalCost / pos.amount;
-    tradeHistory.push({ type: 'buy', tokenId: tok.id, symbol: tok.symbol, solAmount: amount, tokens: tokensBought, price: tok.price, at: Date.now() });
-    saveState();
-    updateNavBalance();
-    showToast(`Bought 0.1 ◎ of $${tok.symbol}`, 'green');
-  } else {
-    const pos = positions[tok.id];
-    if (!pos || pos.amount <= 0) {
-      showToast(`No $${tok.symbol} position`, 'red');
-      return;
-    }
-    const solPrice = 150;
-    const usdVal = pos.amount * tok.price;
-    const solReceived = usdVal / solPrice;
-    paperBalance += solReceived;
-    tradeHistory.push({ type: 'sell', tokenId: tok.id, symbol: tok.symbol, solAmount: solReceived, tokens: pos.amount, price: tok.price, at: Date.now() });
-    delete positions[tok.id];
-    saveState();
-    updateNavBalance();
-    showToast(`Sold all $${tok.symbol} for ◎ ${solReceived.toFixed(4)}`, 'green');
-  }
+  const tokensBought = (solAmt * SOL_USD) / tok.price;
+  balance -= solAmt;
+  if (!positions[tokenId]) positions[tokenId] = { amount: 0, avgPrice: 0, solCost: 0, symbol: tok.symbol, name: tok.name };
+  const pos = positions[tokenId];
+  const prevCost = pos.avgPrice * pos.amount;
+  pos.amount += tokensBought;
+  pos.avgPrice = (prevCost + tok.price * tokensBought) / pos.amount;
+  pos.solCost += solAmt;
+  history.push({ type: 'buy', tokenId, symbol: tok.symbol, sol: solAmt, tokens: tokensBought, price: tok.price, at: Date.now() });
+  save(); updateUI(); refreshTradeUI();
+  setMsg(`✓ Bought ${fmtN(tokensBought)} $${tok.symbol}`, 'ok');
+  showToast(`Bought $${tok.symbol}`, 'g');
 }
 
-function resetPaperTrading() {
-  paperBalance = 100;
-  initialBalance = 100;
-  positions = {};
-  tradeHistory = [];
-  saveState();
-  updateNavBalance();
-  showToast('Paper account reset to ◎ 100', 'green');
+function executeSell(tokenId, pct) {
+  const pos = positions[tokenId];
+  if (!pos || pos.amount <= 0) { setMsg('No position to sell.', 'err'); return; }
+  const tok = findTok(tokenId);
+  const curPrice = tok ? tok.price : pos.avgPrice;
+  const tokensToSell = (pct / 100) * pos.amount;
+  const usdReceived = tokensToSell * curPrice;
+  const solReceived = usdReceived / SOL_USD;
+  const costBasis   = (tokensToSell / pos.amount) * pos.solCost;
+
+  balance  += solReceived;
+  realised += solReceived - costBasis;
+  pos.amount  -= tokensToSell;
+  pos.solCost -= costBasis;
+
+  if (pos.amount < 0.01) delete positions[tokenId];
+  const sym = pos.symbol || tok?.symbol || '?';
+  history.push({ type: 'sell', tokenId, symbol: sym, sol: solReceived, tokens: tokensToSell, price: curPrice, at: Date.now() });
+  save(); updateUI(); refreshTradeUI();
+  setMsg(`✓ Sold ${pct}% for ◎ ${solReceived.toFixed(4)}`, 'ok');
+  showToast(`Sold $${sym}`, 'g');
 }
 
-function findToken(id) {
-  return [...finalStretchTokens, ...migratedTokens].find(t => t.id === id) || null;
+function quickBuy(e, tokenId) {
+  e && e.stopPropagation();
+  const tok = findTok(tokenId);
+  if (!tok) return;
+  if (0.1 > balance) { showToast('Insufficient balance', 'r'); return; }
+  executeBuy(tokenId, 0.1);
 }
 
-// ── Live Simulation ──────────────────────────────────────────────────────────
-function tickFinalStretch() {
-  finalStretchTokens.forEach(tok => {
-    // Price drift
-    const drift = rnd(0.97, 1.06);
-    tok.price *= drift;
-    tok.change += rnd(-3, 5);
-    tok.vol24 *= rnd(0.97, 1.04);
-    tok.mcap *= rnd(0.98, 1.05);
-    tok.mcap = Math.min(tok.mcap, 68000);
-    tok.ageSecs += 5;
-
-    // Progress toward bonding
-    tok.progress = Math.min(100, tok.progress + rnd(0, 0.6));
-
-    // If graduated, migrate it
-    if (tok.progress >= 100) {
-      tok.type = 'migrated';
-      tok.dex = pick(['Raydium', 'Orca', 'Meteora']);
-      tok.progress = 100;
-      migratedTokens.unshift(tok);
-      if (migratedTokens.length > 20) migratedTokens.pop();
-      showToast(`🚀 $${tok.symbol} graduated to ${tok.dex}!`, 'green');
-    }
-
-    // Update price history
-    const last = tok.priceHistory[tok.priceHistory.length - 1];
-    tok.priceHistory.push({
-      t: Date.now(),
-      open: last.close,
-      high: tok.price * rnd(1.0, 1.02),
-      low: tok.price * rnd(0.98, 1.0),
-      close: tok.price,
-    });
-    if (tok.priceHistory.length > 80) tok.priceHistory.shift();
-  });
-
-  // Remove migrated ones from final stretch
-  finalStretchTokens = finalStretchTokens.filter(t => t.type !== 'migrated');
-
-  // Occasionally add a new token
-  if (Math.random() < 0.15 && finalStretchTokens.length < 15) {
-    const newTok = makeToken('finalstretch');
-    finalStretchTokens.unshift(newTok);
-  }
-  if (finalStretchTokens.length > 15) finalStretchTokens.pop();
+function sellAll(tokenId) {
+  activeToken = findTok(tokenId);
+  executeSell(tokenId, 100);
 }
 
-function tickMigrated() {
-  migratedTokens.forEach(tok => {
-    tok.price *= rnd(0.98, 1.04);
-    tok.change += rnd(-2, 3);
-    tok.vol24 *= rnd(0.98, 1.03);
-    tok.ageSecs += 5;
-    tok.buys += rndInt(0, 3);
-    tok.sells += rndInt(0, 2);
-    tok.txns = tok.buys + tok.sells;
-    const last = tok.priceHistory[tok.priceHistory.length - 1];
-    tok.priceHistory.push({
-      t: Date.now(),
-      open: last.close,
-      high: tok.price * rnd(1.0, 1.015),
-      low: tok.price * rnd(0.985, 1.0),
-      close: tok.price,
-    });
-    if (tok.priceHistory.length > 80) tok.priceHistory.shift();
-  });
+function resetAccount() {
+  balance = 100; realised = 0; positions = {}; history = [];
+  save(); updateUI();
+  showToast('Account reset to ◎ 100', 'g');
 }
 
-function liveUpdate() {
-  tickFinalStretch();
-  tickMigrated();
-  renderFinalStretch();
-  renderMigrated();
-
-  // Update modal chart live if open
-  if (activeToken && priceChartInstance) {
-    const tok = findToken(activeToken.id);
-    if (tok) {
-      activeToken = tok;
-      const history = tok.priceHistory;
-      priceChartInstance.data.labels = history.map(d => new Date(d.t));
-      priceChartInstance.data.datasets[0].data = history.map(d => d.close);
-      priceChartInstance.update('none');
-
-      // Update price display
-      document.getElementById('modalPrice').textContent = `$${fmtPrice(tok.price)}`;
-      const chgEl = document.getElementById('modalChange');
-      chgEl.textContent = `${tok.change >= 0 ? '+' : ''}${tok.change.toFixed(2)}%`;
-      chgEl.className = 'modal-change ' + (tok.change >= 0 ? 'positive' : 'negative');
-      document.getElementById('modalMcap').textContent = `$${fmtNum(tok.mcap)}`;
-      document.getElementById('modalVol').textContent = `$${fmtNum(tok.vol24)}`;
-    }
-  }
+function setMsg(msg, cls) {
+  const el = $('tradeMsg');
+  el.textContent = msg;
+  el.className = 'trade-msg ' + cls;
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────
-let toastTimer = null;
-function showToast(msg, cls = '') {
-  const el = document.getElementById('toast');
+function findTok(id) {
+  return [...fsTokens, ...migTokens].find(t => t.id === id) || null;
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+let toastTmr = null;
+function showToast(msg, cls='') {
+  const el = $('toast');
   el.textContent = msg;
   el.className = `toast show ${cls}`;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = 'toast'; }, 2800);
+  clearTimeout(toastTmr);
+  toastTmr = setTimeout(() => el.className = 'toast', 2600);
 }
 
-// ── Keyboard ─────────────────────────────────────────────────────────────────
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeChart();
-});
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-function init() {
-  initTokens();
-  renderFinalStretch();
-  renderMigrated();
-  updateNavBalance();
-  setInterval(liveUpdate, 3000);
-}
+// ── Auto-refresh every 30s ────────────────────────────────────────────────────
+setInterval(fetchTokens, 30000);
 
-init();
+// ── Init ──────────────────────────────────────────────────────────────────────
+updateUI();
+fetchTokens();
